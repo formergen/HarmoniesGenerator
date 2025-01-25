@@ -48,7 +48,9 @@ def select_tracks(track_names):
         try:
             selected_track_indices = [int(x.strip()) - 1 for x in selected_track_indices_str.split(',')]
             if all(0 <= index < len(track_names) for index in selected_track_indices):
+                print(selected_track_indices)
                 return selected_track_indices
+
             else:
                 colored_print(f"{Fore.RED}Error: Invalid track numbers. Please enter numbers within the valid range.{Style.RESET_ALL}")
         except ValueError:
@@ -166,11 +168,11 @@ def is_note_in_key(note_tone, key_tone_index, mode):
     note_class = note_tone % 12
     return note_class in scale_intervals
 
-def generate_harmony_notes(original_notes, semitone_interval, harmony_type, key_tone_index, key_mode):
+def generate_harmony_notes(original_notes_for_track, semitone_interval, harmony_type, key_tone_index, key_mode):
     harmony_tracks_notes = []
     if harmony_type in (1, 3):
         lower_harmony_notes = []
-        for note in original_notes:
+        for note in original_notes_for_track:
             harmony_tone = note['tone'] - semitone_interval
             original_tone = harmony_tone
 
@@ -187,7 +189,7 @@ def generate_harmony_notes(original_notes, semitone_interval, harmony_type, key_
 
     if harmony_type in (2, 3):
         upper_harmony_notes = []
-        for note in original_notes:
+        for note in original_notes_for_track:
             harmony_tone = note['tone'] + semitone_interval
             original_tone = harmony_tone
 
@@ -204,16 +206,26 @@ def generate_harmony_notes(original_notes, semitone_interval, harmony_type, key_
 
     return harmony_tracks_notes
 
-def add_harmony_tracks_to_ustx(ustx_data, original_track_indices, harmony_tracks_notes, harmony_type, track_names):
+def add_harmony_tracks_to_ustx(ustx_data, selected_track_indices, harmony_type, track_names, semitone_interval, key_tone_index, key_mode):
     new_tracks = []
     harmony_names = ["Lower Harmony", "Upper Harmony"]
-    harmony_index = 0
 
-    if harmony_type in (1, 3):
-        for track_index in original_track_indices:
-            original_track = ustx_data['tracks'][track_index]
+    for track_index in selected_track_indices:
+        original_track = ustx_data['tracks'][track_index]
+        original_track_name = original_track['track_name']
+        original_notes_for_track = []
+        for voice_part in ustx_data.get('voice_parts', []):
+            if int(voice_part.get('track_no', 0)) == track_index: 
+                original_notes_for_track.extend(voice_part.get('notes', []))
+
+        harmony_tracks_notes = generate_harmony_notes(original_notes_for_track, semitone_interval, harmony_type, key_tone_index, key_mode)
+
+        harmony_index = 0 
+
+        if harmony_type in (1, 3):
+            lower_harmony_notes = harmony_tracks_notes[0] if harmony_tracks_notes else []
             new_track = original_track.copy()
-            new_track_name = f"{original_track['track_name']} - {harmony_names[0]}"
+            new_track_name = f"{original_track_name} - {harmony_names[0]}"
             new_track['track_name'] = new_track_name
 
             new_voice_part = {
@@ -222,19 +234,17 @@ def add_harmony_tracks_to_ustx(ustx_data, original_track_indices, harmony_tracks
                 'comment': "",
                 'track_no': len(ustx_data['tracks']) + len(new_tracks),
                 'position': 0,
-                'notes': harmony_tracks_notes[harmony_index],
+                'notes': lower_harmony_notes,
                 'curves': []
             }
             ustx_data['voice_parts'].append(new_voice_part)
-
             new_tracks.append(new_track)
-            harmony_index += 1
 
-    if harmony_type in (2, 3):
-        for track_index in original_track_indices:
-            original_track = ustx_data['tracks'][track_index]
+
+        if harmony_type in (2, 3):
+            upper_harmony_notes = harmony_tracks_notes[1] if harmony_type == 3 and len(harmony_tracks_notes) > 1 else harmony_tracks_notes[0] if harmony_type == 2 and harmony_tracks_notes else []
             new_track = original_track.copy()
-            new_track_name = f"{original_track['track_name']} - {harmony_names[1]}"
+            new_track_name = f"{original_track_name} - {harmony_names[1]}"
             new_track['track_name'] = new_track_name
 
             new_voice_part = {
@@ -243,13 +253,12 @@ def add_harmony_tracks_to_ustx(ustx_data, original_track_indices, harmony_tracks
                 'comment': "",
                 'track_no': len(ustx_data['tracks']) + len(new_tracks),
                 'position': 0,
-                'notes': harmony_tracks_notes[harmony_index],
+                'notes': upper_harmony_notes,
                 'curves': []
             }
             ustx_data['voice_parts'].append(new_voice_part)
-
             new_tracks.append(new_track)
-            harmony_index += 1
+
 
     ustx_data['tracks'].extend(new_tracks)
     return ustx_data
@@ -274,26 +283,23 @@ def main():
     harmony_type = select_harmony_type()
     semitone_interval = get_semitone_interval()
 
-    original_notes = []
-    for voice_part in ustx_data.get('voice_parts', []):
-        if int(voice_part.get('track_no', 0)) in selected_track_indices:
-            original_notes.extend(voice_part.get('notes', []))
-
-    if not original_notes:
-        colored_print(f"{Fore.RED}Error: No notes found in the selected tracks' voice parts.{Style.RESET_ALL}")
-        return
-
     use_manual_key_selection = input(f"{Fore.YELLOW}Do you want to manually select the key? (y/N, default No): {Style.RESET_ALL}").lower()
+
+    first_track_notes_for_key_detect = []
+    for voice_part in ustx_data.get('voice_parts', []):
+        if int(voice_part.get('track_no', 0)) == selected_track_indices[0]: 
+            first_track_notes_for_key_detect.extend(voice_part.get('notes', []))
+
+
     if use_manual_key_selection == 'y':
         key_tone_index, key_name, key_mode = select_key_and_mode()
     else:
-        key_tone_index, key_name, key_mode = get_key_from_notes(original_notes)
+        key_tone_index, key_name, key_mode = get_key_from_notes(first_track_notes_for_key_detect)
 
     key_name_display = key_names[key_tone_index]
     colored_print(f"{Fore.GREEN}Detected/Selected Key: {Fore.CYAN}{key_name_display} {key_mode.capitalize()}{Style.RESET_ALL}")
 
-    harmony_tracks_notes = generate_harmony_notes(original_notes, semitone_interval, harmony_type, key_tone_index, key_mode)
-    modified_ustx_data = add_harmony_tracks_to_ustx(ustx_data, selected_track_indices, harmony_tracks_notes, harmony_type, track_names)
+    modified_ustx_data = add_harmony_tracks_to_ustx(ustx_data, selected_track_indices, harmony_type, key_mode, semitone_interval, key_tone_index, key_mode)
 
     output_file_path_raw = input(f"{Fore.YELLOW}Enter the path to save the new USTx file (e.g., harmony_output): {Style.RESET_ALL}")
     output_file_path = re.sub(r"^[\[\(\<]|[\)\]\>]$", "", output_file_path_raw)
